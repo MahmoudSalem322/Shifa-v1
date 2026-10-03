@@ -1,0 +1,11 @@
+node_modules/
+.next/
+out/
+.env*.local
+.env
+# Runtime data written by the route handlers (appointments, donations, prescriptions)
+data/*.json
+data/uploads/
+data/*.tmp
+.claude/
+data/evidence/

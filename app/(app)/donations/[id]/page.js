@@ -1,0 +1,176 @@
+'use client';
+
+import Link from 'next/link';
+import { useState } from 'react';
+import { useParams } from 'next/navigation';
+import { api } from '@/lib/api';
+import { useAsync, useSession } from '@/lib/hooks';
+import { DONATION_MANAGERS, formatDate, formatDateTime, geo, roles } from '@/lib/vocab';
+import { PageBody, PageHeader } from '@/components/app-shell';
+import { AdminDonationControls } from '@/components/admin-donation-controls';
+import { donationStatus, ExpiryBadge } from '@/components/donations';
+import { RequestMatches } from '@/components/matches';
+import { ReviewActions } from '@/components/review-actions';
+import { useToast } from '@/components/toast';
+import { AsyncBlock, Badge, Button, ButtonLink, Card, CardTitle, Field, Icon, InfoRow, inputClass, Modal } from '@/components/ui';
+
+const STATUS_WORDS = { pending: 'أُرسل التبرع', approved: 'تم القبول', rejected: 'تم الرفض', matched: 'حُجزت الكمية كاملة لطلبات أدوية', delivered: 'تم تسليم التبرع', withdrawn: 'سحب المتبرع التبرع' };
+
+/* The donor can take back a donation nobody has reviewed yet. */
+function WithdrawDonation({ donation, onDone }) {
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const withdraw = async () => {
+    setBusy(true);
+    try {
+      await api.donations.withdraw(donation.id, reason.trim());
+      toast('تم سحب التبرع.');
+      setOpen(false);
+      onDone();
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <Button tone="danger" icon="undo" onClick={() => setOpen(true)}>سحب التبرع</Button>
+      <Modal open={open} onClose={() => setOpen(false)} title="سحب التبرع" eyebrow={donation.medicineName}>
+        <div className="flex flex-col gap-space-sm">
+          <p className="font-body-md text-body-md text-text-muted">سيُزال التبرع من قائمة المراجعة ولن يُعرض على الصيدليات والمراكز. لا يمكن التراجع عن السحب.</p>
+          <Field label="السبب (اختياري)" htmlFor="withdraw-reason">
+            <textarea id="withdraw-reason" rows={3} maxLength={500} className={inputClass} value={reason} onChange={(e) => setReason(e.target.value)} />
+          </Field>
+          <div className="flex gap-space-xs">
+            <Button tone="danger" icon="undo" busy={busy} busyLabel="جارٍ السحب…" onClick={withdraw} className="flex-1">تأكيد السحب</Button>
+            <Button tone="ghost" onClick={() => setOpen(false)}>تراجع</Button>
+          </div>
+        </div>
+      </Modal>
+    </>
+  );
+}
+
+/* Module 8 · "Display Donation Details" — shared by donor and reviewer. */
+export default function DonationDetailsPage() {
+  const { id } = useParams();
+  const session = useSession();
+  const state = useAsync(async () => (await api.donations.get(id)).donation, [id]);
+  const matchesState = useAsync(async () => (await api.matches.list({ donationId: id })).matches, [id]);
+  const donation = state.data;
+  const matches = matchesState.data || [];
+  const reviewer = session && DONATION_MANAGERS.includes(session.role);
+  const admin = !!session && session.role === 'Admin';
+
+  return (
+    <>
+      <PageHeader title="تفاصيل التبرع" subtitle={donation ? donation.medicineName : ''} />
+      <PageBody narrow>
+        <nav className="flex items-center gap-1 font-body-sm text-body-sm text-text-muted" aria-label="مسار التنقل">
+          <Link href={reviewer ? '/donations/review' : '/donations'} className="hover:text-text-primary">{admin ? 'إدارة التبرعات' : reviewer ? 'مراجعة التبرعات' : 'تبرعاتي'}</Link>
+          <Icon name="chevron_left" className="text-[18px]" />
+          <span className="text-text-body">تفاصيل التبرع</span>
+        </nav>
+
+        <AsyncBlock state={state}>
+          {donation ? (
+            <>
+              <Card>
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-space-sm">
+                  <div className="flex items-start gap-space-sm">
+                    <span className="w-14 h-14 rounded-xl bg-state-success-subtle text-state-success flex items-center justify-center shrink-0">
+                      <Icon name={donation.donationType === 'equipment' ? 'medical_services' : 'medication'} className="text-[30px]" />
+                    </span>
+                    <div className="flex flex-col gap-1">
+                      <h1 className="font-headline-xl text-headline-xl text-text-heading" dir="auto">{donation.medicineName}</h1>
+                      {donation.donationType !== 'equipment' && <ExpiryBadge expiryDate={donation.expiryDate} days={donation.daysToExpiry} />}
+                    </div>
+                  </div>
+                  <Badge className={donationStatus(donation.status).cls + ' text-label-md py-1 px-3'} icon={donationStatus(donation.status).icon}>
+                    {donationStatus(donation.status).label}
+                  </Badge>
+                </div>
+
+                <CardTitle icon={donation.donationType === 'equipment' ? 'medical_services' : 'medication_liquid'}>
+                  {donation.donationType === 'equipment' ? 'معلومات الجهاز الطبي' : 'معلومات الدواء'}
+                </CardTitle>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-space-sm">
+                  <InfoRow icon="numbers" label="الكمية">
+                    {donation.quantity + ' ' + (donation.donationType === 'equipment' ? 'قطعة' : donation.unit)}
+                    {donation.availableQuantity !== undefined && donation.availableQuantity < donation.quantity ? ' · المتاح ' + donation.availableQuantity : ''}
+                  </InfoRow>
+                  {donation.donationType !== 'equipment' && (
+                    <InfoRow icon="event_busy" label="تاريخ انتهاء الصلاحية">{formatDate(donation.expiryDate)}</InfoRow>
+                  )}
+                  <InfoRow icon="verified_user" label={donation.donationType === 'equipment' ? 'حالة الجهاز' : 'حالة العبوة'}>
+                    {donation.condition === 'sealed' ? 'مغلقة وسليمة (بإقرار المتبرع)' : donation.condition === 'new' ? 'جديد' : donation.condition === 'used' ? 'مستعمل' : donation.condition}
+                  </InfoRow>
+                </div>
+
+                <CardTitle icon="location_on">الاستلام والتواصل</CardTitle>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-space-sm">
+                  <InfoRow icon="map" label="المحافظة">{geo.label(donation.governorate)}</InfoRow>
+                  <InfoRow icon="home_pin" label="العنوان">{donation.address}</InfoRow>
+                  <InfoRow icon="person" label="المتبرع">{donation.donorName}</InfoRow>
+                  <InfoRow icon="call" label="الهاتف">
+                    {donation.donorPhone ? <a href={'tel:' + donation.donorPhone} className="text-text-primary hover:underline" dir="ltr">{donation.donorPhone}</a> : null}
+                  </InfoRow>
+                </div>
+                {donation.notes ? (
+                  <div className="p-space-sm rounded-xl bg-surface-subtle">
+                    <span className="font-label-sm text-label-sm text-text-muted block mb-1">ملاحظات المتبرع</span>
+                    <p className="font-body-md text-body-md text-text-body whitespace-pre-line">{donation.notes}</p>
+                  </div>
+                ) : null}
+
+                {reviewer && donation.status === 'pending' && !donation.isMine ? (
+                  <ReviewActions donation={donation} onDone={() => state.reload()} />
+                ) : null}
+
+                {admin ? <AdminDonationControls donation={donation} onChanged={() => state.reload()} /> : null}
+
+                {donation.isMine && donation.status === 'pending' ? (
+                  <div className="flex flex-wrap gap-space-xs">
+                    <ButtonLink href={'/donations/new?edit=' + encodeURIComponent(donation.id)} tone="soft" icon="edit">تعديل التبرع</ButtonLink>
+                    <WithdrawDonation donation={donation} onDone={() => state.reload()} />
+                  </div>
+                ) : null}
+              </Card>
+
+              {matches.length ? (
+                <Card>
+                  <CardTitle icon="join" count={matches.length}>طلبات الأدوية المرتبطة</CardTitle>
+                  <RequestMatches matches={matches} />
+                </Card>
+              ) : null}
+
+              <Card>
+                <CardTitle icon="timeline">سجل الحالة</CardTitle>
+                <ol className="flex flex-col gap-space-sm border-r-2 border-border-soft pr-space-md">
+                  {(donation.history || []).map((entry, index) => (
+                    <li key={index} className="relative">
+                      <span className={'absolute -right-[calc(1.5rem+7px)] top-1 w-3 h-3 rounded-full ' + (entry.status === 'rejected' ? 'bg-state-danger' : entry.status === 'withdrawn' ? 'bg-outline' : entry.status === 'pending' ? 'bg-state-warning' : entry.status === 'matched' ? 'bg-state-info' : 'bg-state-success')} />
+                      <div className="flex flex-col">
+                        <span className="font-label-lg text-label-lg text-text-heading">{STATUS_WORDS[entry.status] || entry.status}</span>
+                        <span className="font-body-sm text-body-sm text-text-muted">{formatDateTime(entry.at)}{entry.by ? ' · ' + entry.by : ''}</span>
+                        {entry.note ? <span className="font-body-sm text-body-sm text-text-body mt-1">{entry.note}</span> : null}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+                {donation.reviewerRole ? (
+                  <p className="font-body-sm text-body-sm text-text-muted">راجعته جهة من نوع: {roles.toArabic(donation.reviewerRole)}</p>
+                ) : null}
+              </Card>
+            </>
+          ) : null}
+        </AsyncBlock>
+      </PageBody>
+    </>
+  );
+}

@@ -1,0 +1,2 @@
+import { handle, HttpError, readJson } from '@/lib/server/auth';import { findUser } from '@/lib/server/local-auth';import { issueOtp } from '@/lib/server/otp';
+export const POST=handle(async request=>{const {email}=await readJson(request);const user=await findUser(email);if(!user)throw new HttpError(404,'لم يتم العثور على حساب بهذا البريد.');const result=await issueOtp(user);return Response.json({ok:true,...(process.env.NODE_ENV!=='production'?{devOtp:result.otp}:{})})});

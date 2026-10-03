@@ -1,0 +1,2 @@
+import { handle, requireUser } from '@/lib/server/auth';import { medicines } from '@/lib/server/directory';
+export const GET=handle(async request=>{await requireUser(request);const q=new URL(request.url).searchParams;let data=await medicines();const name=(q.get('name')||'').toLowerCase();const cat=(q.get('category')||'').toLowerCase();if(name)data=data.filter(d=>String(d.name||'').toLowerCase().includes(name)||String(d.scientificName||'').toLowerCase().includes(name));if(cat)data=data.filter(d=>String(d.category||'').toLowerCase()===cat);return Response.json({data})});

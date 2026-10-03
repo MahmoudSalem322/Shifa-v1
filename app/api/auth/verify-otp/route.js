@@ -1,0 +1,2 @@
+import { handle, HttpError, readJson } from '@/lib/server/auth';import { findUser, sessionResponse } from '@/lib/server/local-auth';import { verifyOtp } from '@/lib/server/otp';
+export const POST=handle(async request=>{const b=await readJson(request);const user=await findUser(b.email);if(!user||!(await verifyOtp(b.email,b.otp)))throw new HttpError(400,'رمز التحقق غير صحيح أو منتهي الصلاحية.');return Response.json({ok:true,...sessionResponse(user)})});
